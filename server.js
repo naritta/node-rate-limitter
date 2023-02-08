@@ -33,18 +33,18 @@ app.post('/login', (req, res) => {
 
 app.get('/private', authenticate, (req, res) => {
   const token = req.headers.authorization;
-  res.status(200).json({
-    message: 'Hello!',
-    authEmail: req.jwtPayload.email,
-  });
+  limiter(req, res, token);
 });
 
 app.get('/public', (req, res) => {
-  const ip = req.ip;
+  limiter(req, res, req.ip);
+});
+
+function limiter(req, res, key) {
   const current = moment().unix();
 
   redisClient.zremrangebyscore([
-    ip, 0, current-LIMIT_TIME
+    key, 0, current-LIMIT_TIME
   ], function (e, r) {
     if (!e) return;
 
@@ -54,7 +54,7 @@ app.get('/public', (req, res) => {
 
   var total;
   redisClient.zcount([
-    ip, '-inf', '+inf'
+    key, 0, '+inf'
   ], function (e, total) {
     if (e) {
       log.error(e);
@@ -62,7 +62,7 @@ app.get('/public', (req, res) => {
     }
 
     if (total > LIMIT_TOKEN) {
-      redisClient.zrange([ip, 0, 0, 'withscores'], function (e, oldests) {
+      redisClient.zrange([key, 0, 0, 'withscores'], function (e, oldests) {
         const oldest = oldests[1]
 
         return res.status(429).setHeader('Retry-After', 3600-(current-oldest)).json({
@@ -74,7 +74,7 @@ app.get('/public', (req, res) => {
       })
     } else {
       redisClient.zadd([
-        ip, current, uuidv4()
+        key, current, uuidv4()
       ], function (e, r) {
         if (!e) return;
         log.error(e);
@@ -84,6 +84,6 @@ app.get('/public', (req, res) => {
       res.send('OK.');
     }
   })
-});
+}
 
 app.listen(3000, () => console.log('Listening on port 3000...'));
