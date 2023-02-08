@@ -3,7 +3,17 @@ const bodyParser = require('body-parser');
 const jwt = require('jsonwebtoken');
 const config = require('./config');
 const authenticate = require('./authenticate');
+const redis = require('redis')
+const redisClient = redis.createClient({
+  url: " redis://redis:6379"
+});
+const moment = require('moment')
+const { v4: uuidv4 } = require('uuid');
 const app = express();
+
+const LIMIT_TOKEN = config.limit.token
+const LIMIT_IP = config.limit.ip
+const LIMIT_TIME = config.limit.time
 
 app.use(bodyParser.json());
 
@@ -22,6 +32,7 @@ app.post('/login', (req, res) => {
 });
 
 app.get('/private', authenticate, (req, res) => {
+  const token = req.headers.authorization;
   res.status(200).json({
     message: 'Hello!',
     authEmail: req.jwtPayload.email,
@@ -29,7 +40,50 @@ app.get('/private', authenticate, (req, res) => {
 });
 
 app.get('/public', (req, res) => {
-  res.send('Hello ip');
+  const ip = req.ip;
+  const current = moment().unix();
+
+  redisClient.zremrangebyscore([
+    ip, 0, current-LIMIT_TIME
+  ], function (e, r) {
+    if (!e) return;
+
+    log.error(e);
+    res.status(500).send('An internal error occurs(Redis connection for zremrangebyscore).');
+  })
+
+  var total;
+  redisClient.zcount([
+    ip, '-inf', '+inf'
+  ], function (e, total) {
+    if (e) {
+      log.error(e);
+      res.status(500).send('An internal error occurs(Redis connection for zcount).');
+    }
+
+    if (total > LIMIT_TOKEN) {
+      redisClient.zrange([ip, 0, 0, 'withscores'], function (e, oldests) {
+        const oldest = oldests[1]
+
+        return res.status(429).setHeader('Retry-After', 3600-(current-oldest)).json({
+          message: `It exceeds limit. Please retry after ${3600-(current-oldest)}s.`
+        });
+
+        log.error(e);
+        res.status(500).send('An internal error occurs(Redis connection for zrange).');
+      })
+    } else {
+      redisClient.zadd([
+        ip, current, uuidv4()
+      ], function (e, r) {
+        if (!e) return;
+        log.error(e);
+        res.status(500).send('An internal error occurs(Redis connection for zadd).');
+      })
+
+      res.send('OK.');
+    }
+  })
 });
 
 app.listen(3000, () => console.log('Listening on port 3000...'));

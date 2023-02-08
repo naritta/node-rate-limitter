@@ -5,5 +5,10 @@ module.exports = {
       algorithm: 'HS256',
       expiresIn: '10m'
     }
+  },
+  limit: {
+    time: 10,
+    ip: 5,
+    token: 5,
   }
 };
