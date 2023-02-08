@@ -40,7 +40,19 @@ app.get('/public', (req, res) => {
   limiter(req, res, req.ip);
 });
 
-function limiter(req, res, key) {
+app.get('/weight1', (req, res) => {
+  limiter(req, res, "weight:"+req.ip);
+});
+
+app.get('/weight2', (req, res) => {
+  limiter(req, res, "weight:"+req.ip, 2);
+});
+
+app.get('/weight5', (req, res) => {
+  limiter(req, res, "weight:"+req.ip, 5);
+});
+
+function limiter(req, res, key, weight=1) {
   const current = moment().unix();
 
   redisClient.zremrangebyscore([
@@ -52,7 +64,6 @@ function limiter(req, res, key) {
     res.status(500).send('An internal error occurs(Redis connection for zremrangebyscore).');
   })
 
-  var total;
   redisClient.zcount([
     key, 0, '+inf'
   ], function (e, total) {
@@ -61,7 +72,8 @@ function limiter(req, res, key) {
       res.status(500).send('An internal error occurs(Redis connection for zcount).');
     }
 
-    if (total > LIMIT_TOKEN) {
+    // add one for current request
+    if (total+1 > LIMIT_TOKEN) {
       redisClient.zrange([key, 0, 0, 'withscores'], function (e, oldests) {
         const oldest = oldests[1]
 
@@ -73,9 +85,11 @@ function limiter(req, res, key) {
         res.status(500).send('An internal error occurs(Redis connection for zrange).');
       })
     } else {
-      redisClient.zadd([
-        key, current, uuidv4()
-      ], function (e, r) {
+      let appending = [key];
+      for (let i = 0; i < weight; i++) {
+        appending.push(current, uuidv4());
+      }
+      redisClient.zadd(appending, function (e, r) {
         if (!e) return;
         log.error(e);
         res.status(500).send('An internal error occurs(Redis connection for zadd).');
