@@ -7,8 +7,11 @@ module.exports = {
     }
   },
   limit: {
-    time: 10,
-    ip: 5,
-    token: 5,
+    time: 3600,
+    ip: 100,
+    token: 200,
+  },
+  redis: {
+    url: "redis://redis:6379"
   }
 };
