@@ -4,9 +4,7 @@ const jwt = require('jsonwebtoken');
 const config = require('./config');
 const authenticate = require('./authenticate');
 const redis = require('redis')
-const redisClient = redis.createClient({
-  url: " redis://redis:6379"
-});
+const redisClient = redis.createClient({url: config.redis.url});
 const moment = require('moment')
 const { v4: uuidv4 } = require('uuid');
 const app = express();
@@ -33,35 +31,35 @@ app.post('/login', (req, res) => {
 
 app.get('/private', authenticate, (req, res) => {
   const token = req.headers.authorization;
-  limiter(req, res, token);
+  limiter(req, res, token, LIMIT_TOKEN);
 });
 
 app.get('/public', (req, res) => {
-  limiter(req, res, req.ip);
+  limiter(req, res, req.ip, LIMIT_IP);
 });
 
 app.get('/weight1', (req, res) => {
-  limiter(req, res, "weight:"+req.ip);
+  limiter(req, res, "weight:"+req.ip, LIMIT_IP);
 });
 
 app.get('/weight2', (req, res) => {
-  limiter(req, res, "weight:"+req.ip, 2);
+  limiter(req, res, "weight:"+req.ip, LIMIT_IP, 2);
 });
 
 app.get('/weight5', (req, res) => {
-  limiter(req, res, "weight:"+req.ip, 5);
+  limiter(req, res, "weight:"+req.ip, LIMIT_IP, 5);
 });
 
-function limiter(req, res, key, weight=1) {
+function limiter(req, res, key, limit, weight=1) {
   const current = moment().unix();
 
   redisClient.zremrangebyscore([
     key, 0, current-LIMIT_TIME
   ], function (e, r) {
-    if (!e) return;
-
-    log.error(e);
-    res.status(500).send('An internal error occurs(Redis connection for zremrangebyscore).');
+    if (e) {
+      log.error(e);
+      res.status(500).send('An internal error occurs(Redis connection for zremrangebyscore).');
+    }
   })
 
   redisClient.zcount([
@@ -73,16 +71,19 @@ function limiter(req, res, key, weight=1) {
     }
 
     // add one for current request
-    if (total+1 > LIMIT_TOKEN) {
+    if (total+1 > limit) {
       redisClient.zrange([key, 0, 0, 'withscores'], function (e, oldests) {
+        if (e) {
+          log.error(e);
+          res.status(500).send('An internal error occurs(Redis connection for zrange).');
+        }
+
         const oldest = oldests[1]
-
-        return res.status(429).setHeader('Retry-After', 3600-(current-oldest)).json({
-          message: `It exceeds limit. Please retry after ${3600-(current-oldest)}s.`
+        // currenttime - oldesttime = how many seconds passed from oldest request
+        // limittime - it = how many seconds it should wait for next.
+        return res.status(429).setHeader('Retry-After', LIMIT_TIME-(current-oldest)).json({
+          message: `It exceeds limit. Please retry after ${LIMIT_TIME-(current-oldest)}s.`
         });
-
-        log.error(e);
-        res.status(500).send('An internal error occurs(Redis connection for zrange).');
       })
     } else {
       let appending = [key];
@@ -90,9 +91,10 @@ function limiter(req, res, key, weight=1) {
         appending.push(current, uuidv4());
       }
       redisClient.zadd(appending, function (e, r) {
-        if (!e) return;
-        log.error(e);
-        res.status(500).send('An internal error occurs(Redis connection for zadd).');
+        if (e) {
+          log.error(e);
+          res.status(500).send('An internal error occurs(Redis connection for zadd).');
+        }
       })
 
       res.send('OK.');
